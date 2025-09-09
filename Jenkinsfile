@@ -1,15 +1,10 @@
 pipeline {
-  agent {
-    docker {
-      image 'docker:20.10-dind'
-      args '--privileged -v /var/run/docker.sock:/var/run/docker.sock'
-    }
-  }
+  agent any
   options { disableConcurrentBuilds() }
 
   environment {
     AWS_DEFAULT_REGION = "us-west-2"
-    AWS_ACCOUNT_ID     = "717844930952" // replace with your AWS account id
+    AWS_ACCOUNT_ID     = "717844930952"   // replace with your AWS account id
     REGISTRY           = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
     IMAGE_NAME         = "myapp"
     COMMIT_SHA         = "${env.GIT_COMMIT}"
@@ -22,44 +17,51 @@ pipeline {
       steps { checkout scm }
     }
 
-    stage('Build Docker Image') {
-      steps {
-        sh """
-          echo "Building Docker image..."
-          docker build -t ${REGISTRY}/${IMAGE_NAME}:${COMMIT_SHA} .
-        """
+    stage('Build & Push with Kaniko') {
+      agent {
+        docker {
+          image 'gcr.io/kaniko-project/executor:latest'
+          args '-v /kaniko/.docker:/kaniko/.docker'   // mount docker config for ECR login
+        }
       }
-    }
-
-    stage('Login & Push to ECR') {
       steps {
-        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'AWS_CREDENTIALS']]) {
           sh """
             echo "Logging in to ECR..."
+            mkdir -p /kaniko/.docker
             aws ecr get-login-password --region ${AWS_DEFAULT_REGION} \
               | docker login --username AWS --password-stdin ${REGISTRY}
-            echo "Pushing Docker image..."
-            docker push ${REGISTRY}/${IMAGE_NAME}:${COMMIT_SHA}
+
+            echo "Generating Docker config for Kaniko..."
+            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} \
+              | docker login --username AWS --password-stdin ${REGISTRY}
+            cp /root/.docker/config.json /kaniko/.docker/config.json
+
+            echo "Building & Pushing image with Kaniko..."
+            /kaniko/executor \
+              --dockerfile=Dockerfile \
+              --context=${WORKSPACE} \
+              --destination=${REGISTRY}/${IMAGE_NAME}:${COMMIT_SHA} \
+              --destination=${REGISTRY}/${IMAGE_NAME}:latest
           """
         }
       }
     }
 
-    stage('PR Preview Info & GitHub Comment') {
+    stage('PR Preview Info') {
       when { expression { return env.IS_PR == 'true' } }
       steps {
         echo "PR Preview URL: https://app-pr-${CHANGE_ID}.preview.afsarblogs.com"
-
-        // Post PR comment to GitHub using Secret Text token
-        withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
-          sh '''
-            curl -s -H "Authorization: token $GH_TOKEN" \
-                 -H "Accept: application/vnd.github+json" \
-                 -X POST \
-                 -d "{\"body\":\"Preview available at: https://app-pr-${CHANGE_ID}.preview.afsarblogs.com\"}" \
-                 https://api.github.com/repos/afsarblogs/myapp/issues/${CHANGE_ID}/comments
-          '''
-        }
+        // Optional: Post PR comment
+        // withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
+        //   sh '''
+        //   curl -s -H "Authorization: token $GH_TOKEN" \
+        //        -H "Accept: application/vnd.github+json" \
+        //        -X POST \
+        //        -d "{\"body\":\"Preview available at: https://app-pr-${CHANGE_ID}.preview.afsarblogs.com\"}" \
+        //        https://api.github.com/repos/afsarblogs/myapp/issues/${CHANGE_ID}/comments
+        //   '''
+        // }
       }
     }
   }
