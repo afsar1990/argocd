@@ -1,1 +1,64 @@
+pipeline {
+  agent any
+  options { disableConcurrentBuilds() }
 
+  environment {
+    AWS_DEFAULT_REGION = "us-west-2"
+    AWS_ACCOUNT_ID     = "717844930952" // replace with your AWS account id
+    REGISTRY           = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+    IMAGE_NAME         = "myapp"
+    COMMIT_SHA         = "${env.GIT_COMMIT}"
+    SHORT_SHA          = "${env.GIT_COMMIT?.take(7)}"
+    IS_PR              = "${env.CHANGE_ID ? 'true' : 'false'}"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
+    }
+
+    stage('Build Docker Image') {
+      steps {
+        sh """
+          echo "Building Docker image..."
+          docker build -t ${REGISTRY}/${IMAGE_NAME}:${COMMIT_SHA} .
+        """
+      }
+    }
+
+    stage('Login & Push to ECR') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'AWS_CREDENTIALS']]) {
+          sh """
+            echo "Logging in to ECR..."
+            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} \
+              | docker login --username AWS --password-stdin ${REGISTRY}
+            echo "Pushing Docker image..."
+            docker push ${REGISTRY}/${IMAGE_NAME}:${COMMIT_SHA}
+          """
+        }
+      }
+    }
+
+    stage('PR Preview Info') {
+      when { expression { return env.IS_PR == 'true' } }
+      steps {
+        echo "PR Preview URL: https://app-pr-${CHANGE_ID}.preview.afsarblogs.com"
+        // Optional: Post comment to PR using GitHub token
+        // withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
+        //   sh '''
+        //   curl -s -H "Authorization: token $GH_TOKEN" \
+        //        -H "Accept: application/vnd.github+json" \
+        //        -X POST \
+        //        -d "{\"body\":\"Preview available at: https://app-pr-${CHANGE_ID}.preview.afsarblogs.com\"}" \
+        //        https://api.github.com/repos/afsarblogs/myapp/issues/${CHANGE_ID}/comments
+        //   '''
+        // }
+      }
+    }
+  }
+
+  post {
+    failure { echo '❌ Build failed' }
+  }
+}
