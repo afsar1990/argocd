@@ -45,20 +45,21 @@ pipeline {
       }
     }
 
-    stage('PR Preview Info') {
+    stage('PR Preview Info & GitHub Comment') {
       when { expression { return env.IS_PR == 'true' } }
       steps {
         echo "PR Preview URL: https://app-pr-${CHANGE_ID}.preview.afsarblogs.com"
-        // Optional: Post comment to PR using GitHub token
-        // withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
-        //   sh '''
-        //   curl -s -H "Authorization: token $GH_TOKEN" \
-        //        -H "Accept: application/vnd.github+json" \
-        //        -X POST \
-        //        -d "{\"body\":\"Preview available at: https://app-pr-${CHANGE_ID}.preview.afsarblogs.com\"}" \
-        //        https://api.github.com/repos/afsarblogs/myapp/issues/${CHANGE_ID}/comments
-        //   '''
-        // }
+
+        // Post PR comment to GitHub using Secret Text token
+        withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
+          sh '''
+            curl -s -H "Authorization: token $GH_TOKEN" \
+                 -H "Accept: application/vnd.github+json" \
+                 -X POST \
+                 -d "{\"body\":\"Preview available at: https://app-pr-${CHANGE_ID}.preview.afsarblogs.com\"}" \
+                 https://api.github.com/repos/afsarblogs/myapp/issues/${CHANGE_ID}/comments
+          '''
+        }
       }
     }
   }
